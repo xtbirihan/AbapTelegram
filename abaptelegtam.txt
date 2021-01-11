@@ -22,7 +22,7 @@ CLASS lcl_odata_tool IMPLEMENTATION.
     DATA: lv_url TYPE string.
 
     lv_url = 'https://api.telegram.org/bot<INSERT_YOUR_KEY_HERE>/sendMessage?' &&
-             'chat_id=666040496' && |&| && |text=| && |{ iv_text }|.
+             'chat_id=<YOUR_CHAT_ID_HERE>' && |&| && |text=| && |{ iv_text }|.
 
 
     CALL METHOD cl_http_client=>create_by_url
