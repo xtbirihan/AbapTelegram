@@ -1,0 +1,243 @@
+PROGRAM zzsaptextedit_demo_3.
+
+CLASS lcl_odata_tool DEFINITION.
+  PUBLIC SECTION.
+
+    CLASS-METHODS create_opp
+      IMPORTING
+        !iv_text TYPE string.
+  PROTECTED SECTION.
+  PRIVATE SECTION.
+ENDCLASS.
+CLASS lcl_odata_tool IMPLEMENTATION.
+  METHOD create_opp.
+
+    DATA:lo_http_client TYPE REF TO if_http_client,
+         lv_status      TYPE i,
+         lt_fields      TYPE tihttpnvp,
+         lv_sysubrc     TYPE sysubrc.
+
+    DATA: lv_body TYPE string.
+    DATA: request_data TYPE string.
+    DATA: lv_url TYPE string.
+
+    lv_url = 'https://api.telegram.org/bot<INSERT_YOUR_KEY_HERE>/sendMessage?' &&
+             'chat_id=666040496' && |&| && |text=| && |{ iv_text }|.
+
+
+    CALL METHOD cl_http_client=>create_by_url
+      EXPORTING
+        url                = lv_url
+      IMPORTING
+        client             = lo_http_client
+      EXCEPTIONS
+        argument_not_found = 1
+        plugin_not_active  = 2
+        internal_error     = 3
+        OTHERS             = 4.
+
+    ASSERT sy-subrc = 0.
+    lo_http_client->propertytype_accept_cookie = if_http_client=>co_enabled.
+
+    CALL METHOD lo_http_client->request->set_method( if_http_request=>co_request_method_post ).
+
+    lo_http_client->request->set_header_field( name = 'Content-Type' value = if_rest_media_type=>gc_appl_json ).
+    lo_http_client->request->set_header_field( name = 'Accept' value = if_rest_media_type=>gc_appl_json ).
+
+    CALL METHOD lo_http_client->send
+      EXCEPTIONS
+        http_communication_failure = 1
+        http_invalid_state         = 2
+        http_processing_failed     = 3.
+
+    ASSERT sy-subrc = 0.
+
+    CALL METHOD lo_http_client->receive
+      EXCEPTIONS
+        http_communication_failure = 1
+        http_invalid_state         = 2
+        http_processing_failed     = 3.
+
+    IF sy-subrc <> 0.
+      CALL METHOD lo_http_client->get_last_error
+        IMPORTING
+          code    = lv_sysubrc
+          message = DATA(ev_message).
+      RETURN.
+    ENDIF.
+    DATA(lv_json) = lo_http_client->response->get_cdata( ).
+    DATA: lr_out              TYPE REF TO data.
+    /ui2/cl_json=>deserialize( EXPORTING json = lv_json pretty_name = /ui2/cl_json=>pretty_mode-camel_case
+                                CHANGING data = lr_out ).
+
+*    WRITE:/ lv_json.
+  ENDMETHOD.
+
+
+ENDCLASS.
+
+
+START-OF-SELECTION.
+  CALL SCREEN 100.
+
+  DATA:
+    g_editor           TYPE REF TO cl_gui_textedit,
+    g_editor_container TYPE REF TO cl_gui_custom_container,
+    g_ok_code          LIKE sy-ucomm,
+    g_repid            LIKE sy-repid.
+
+  CONSTANTS: c_line_length TYPE i VALUE 256.
+
+* define table type for data exchange
+  TYPES: BEGIN OF mytable_line,
+           line(c_line_length) TYPE c,
+         END OF mytable_line.
+
+* table to exchange text
+  DATA g_mytable TYPE TABLE OF mytable_line.
+
+* necessary to flush the automation queue
+  CLASS cl_gui_cfw DEFINITION LOAD.
+
+
+************************************************************************
+*   P B O
+************************************************************************
+MODULE pbo OUTPUT.
+  IF g_editor IS INITIAL.
+
+*   set status
+    SET PF-STATUS 'MAIN100'.
+    g_repid = sy-repid.
+
+*   create control container
+    CREATE OBJECT g_editor_container
+      EXPORTING
+        container_name              = 'TEXTEDITOR1'
+      EXCEPTIONS
+        cntl_error                  = 1
+        cntl_system_error           = 2
+        create_error                = 3
+        lifetime_error              = 4
+        lifetime_dynpro_dynpro_link = 5.
+    IF sy-subrc NE 0.
+*      add your handling
+    ENDIF.
+
+    CREATE OBJECT g_editor
+      EXPORTING
+        parent                     = g_editor_container
+        wordwrap_mode              = cl_gui_textedit=>wordwrap_at_fixed_position
+        wordwrap_to_linebreak_mode = cl_gui_textedit=>true
+      EXCEPTIONS
+        OTHERS                     = 1.
+    IF sy-subrc NE 0.
+      CALL FUNCTION 'POPUP_TO_INFORM'
+        EXPORTING
+          titel = g_repid
+          txt2  = space
+          txt1  = TEXT-001.
+    ENDIF.
+
+  ENDIF.                               " Editor is initial
+
+ENDMODULE.                             " PBO
+
+
+************************************************************************
+*   P A I
+************************************************************************
+MODULE pai INPUT.
+
+  CASE g_ok_code.
+
+    WHEN 'EXIT'.
+      PERFORM exit_program.
+
+    WHEN 'SAVE'.
+*     retrieve table from control
+      CALL METHOD g_editor->get_text_as_r3table
+        IMPORTING
+          table  = g_mytable
+        EXCEPTIONS
+          OTHERS = 1.
+      IF sy-subrc NE 0.
+        CALL FUNCTION 'POPUP_TO_INFORM'
+          EXPORTING
+            titel = g_repid
+            txt2  = space
+            txt1  = TEXT-003.
+      ENDIF.
+
+      CALL METHOD cl_gui_cfw=>flush
+        EXCEPTIONS
+          OTHERS = 1.
+
+      DATA: lv_text TYPE string.
+      CLEAR: lv_text.
+
+      LOOP AT g_mytable INTO DATA(ls_mytable).
+        lv_text = lv_text && |{ ls_mytable-line }|.
+      ENDLOOP.
+
+      DATA(lo_class) = NEW lcl_odata_tool(  ).
+      lo_class->create_opp( lv_text ).
+  ENDCASE.
+
+  CLEAR g_ok_code.
+ENDMODULE.                             " PAI
+
+
+************************************************************************
+*  F O R M S
+************************************************************************
+
+*&---------------------------------------------------------------------*
+*&      Form  EXIT_PROGRAM
+*&---------------------------------------------------------------------*
+FORM exit_program.
+* Destroy Control.
+  IF NOT g_editor IS INITIAL.
+    CALL METHOD g_editor->free
+      EXCEPTIONS
+        OTHERS = 1.
+    IF sy-subrc NE 0.
+      CALL FUNCTION 'POPUP_TO_INFORM'
+        EXPORTING
+          titel = g_repid
+          txt2  = space
+          txt1  = TEXT-005.
+    ENDIF.
+*   free ABAP object also
+    FREE g_editor.
+  ENDIF.
+
+
+* destroy container
+  IF NOT g_editor_container IS INITIAL.
+    CALL METHOD g_editor_container->free
+      EXCEPTIONS
+        OTHERS = 1.
+    IF sy-subrc <> 0.
+*         MESSAGE E002 WITH F_RETURN.
+    ENDIF.
+*   free ABAP object also
+    FREE g_editor_container.
+  ENDIF.
+
+
+* finally flush
+  CALL METHOD cl_gui_cfw=>flush
+    EXCEPTIONS
+      OTHERS = 1.
+  IF sy-subrc NE 0.
+    CALL FUNCTION 'POPUP_TO_INFORM'
+      EXPORTING
+        titel = g_repid
+        txt2  = space
+        txt1  = TEXT-002.
+  ENDIF.
+
+  LEAVE PROGRAM.
+
+ENDFORM.                               " EXIT_PROGRAM
